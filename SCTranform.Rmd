@@ -1,0 +1,131 @@
+---
+title: "SCTransform Performance on CellBench Data"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, cache = TRUE)
+```
+
+```{r, echo=FALSE}
+if (!requireNamespace('devtools'))
+  install.packages('devtools')
+## install sctransform
+if (!requireNamespace('sctransform'))
+  devtools::install_github(repo = 'ChristophH/sctransform')
+if (!requireNamespace('mixOmics'))
+  devtools::install_github(repo = 'mixOmicsTeam/mixOmics')
+if (!requireNamespace('scater'))
+  devtools::install_github(repo = 'davismcc/scater')
+```
+
+```{r}
+library(sctransform)
+library(mixOmics) 
+library(scater)
+library(scran)
+```
+
+
+
+```{r, echo=FALSE}
+url_5cl <- url('https://github.com/LuyiTian/CellBench_data/blob/master/data/sincell_with_class_5cl.RData?raw=true')
+load(url_5cl)
+
+url_cellmix <- url('https://github.com/LuyiTian/CellBench_data/blob/master/data/9cellmix_qc.RData?raw=true')
+load(url_cellmix)
+
+url_RNAmix <- url('https://github.com/LuyiTian/CellBench_data/blob/master/data/mRNAmix_qc.RData?raw=true')
+load(url_RNAmix)
+
+```
+```{r, echo=FALSE}
+## function to filter by mean counts and detection limit
+filter_sce <- function(sce, mean_count=0, cell_det=0) {
+  stopifnot(cell_det<=1 & cell_det>=0)
+  cell_dropout <- (1-cell_det)*100
+  sce_rd <- rowData(sce)
+  pass_filt <- sce_rd$mean_counts>=mean_count & sce_rd$pct_dropout_by_counts<=cell_dropout
+  sce[pass_filt,]
+}
+## main plot function
+pca_sctransform <- function(sce, cell_det = 0.05, min_expr =4, cell_line_colname="cell_line", do_scran=TRUE) {
+    celline <-  as.factor(colData(sce)[,cell_line_colname])
+    sce <- calculateQCMetrics(sce)
+    sce <- filter_sce(sce, mean_count = min_expr, cell_det = cell_det)
+    umi_sce = as(counts(sce), "dgCMatrix")
+    # sctransform
+    vst_sce <- vst(umi_sce, n_genes = NULL, return_corrected_umi = TRUE,
+                      show_progress = FALSE)
+    
+    if (do_scran) {
+        require(scran)
+        sce <- computeSumFactors(sce)
+        sce <- normalize(sce)
+        scran_norm <- t(logcounts(sce))
+    }
+    scey <- t(vst_sce$y)
+    sceumi <- t(log1p(as.matrix(vst_sce$umi_corrected)))
+    sce_pca <- pca(scey, ncomp = 10)
+    sce_pca_umi <- pca(sceumi, ncomp = 10)
+    cat("Explained Variance for PCA of SCTransformed Data")
+    par(mfrow=c(1,2))
+    plot(sce_pca, main = "Pearson Residuals")
+    plot(sce_pca_umi, main = "Corrected UMIs")
+    
+    cat("Sample Plots using Either Pearson Residuals or Corrected UMIs")
+    par(mfrow=c(1,2))
+    plotIndiv(sce_pca, group = celline, pch=16, title="PCA using Pearson Residuals", legend=TRUE, legend.title="Phenotype")
+    plotIndiv(sce_pca_umi, group = celline, pch=16, title="PCA using log(corrected UMI counts)", legend=TRUE, legend.title="Phenotype")
+    if (do_scran) {
+        cat("Sample Plots using scran-normalised data")
+        pca_scran <- pca(scran_norm, ncomp = 10)
+        plotIndiv(pca_scran, group = celline, pch=16, title="PCA using scran normalised data", legend=TRUE, legend.title="Phenotype")
+    }
+}
+```
+
+
+# The 5 cell line Data
+
+Cells from five lung cancer cell lines.
+
+## 10X
+
+```{r}
+pca_sctransform(sce_sc_10x_5cl_qc)
+```
+
+## CEL-seq2 - plate 1
+
+```{r}
+pca_sctransform(sc_Celseq2_5cl_p1, cell_line_colname = "cell_line_demuxlet")
+```
+
+## CEL-seq2 - plate 2
+
+```{r}
+pca_sctransform(sc_Celseq2_5cl_p2, cell_line_colname = "cell_line_demuxlet")
+```
+
+## CEL-seq2 - plate 3
+
+```{r}
+pca_sctransform(sc_Celseq2_5cl_p3, cell_line_colname = "cell_line_demuxlet")
+```
+
+# RNA mix
+
+Diluted mixture of mRNA from 3 of the 5 cell lines (those most phenotypically similar to each other) in different proportions to create pseudo single cells.
+
+## CEL-seq2
+
+```{r}
+pca_sctransform(sce2_qc, cell_line_colname = "mix")
+```
+
+## SORT-seq
+
+```{r}
+pca_sctransform(sce8_qc, cell_line_colname = "mix")
+```
