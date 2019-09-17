@@ -1,3 +1,4 @@
 Single*
 *.pdf
 *_cache
+.DS_Store
