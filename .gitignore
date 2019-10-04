@@ -2,3 +2,5 @@ Single*
 *.pdf
 *_cache
 .DS_Store
+.Rproj.user
+Bookdown*
