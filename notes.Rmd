@@ -1,0 +1,64 @@
+---
+title: "notes"
+output: github_document
+---
+
+# Discussions with Aaron
+
+From Aaron:
+
+_You can see that the HVGs (first 100) have pretty large variances past a mean of 10, and it just keeps on increasing... which kind of defeats the purpose of doing a "variance stabilizing transformation". Long story short; if you're going to use sctransform, use the corrected UMIs, but if you're going to do that, you might as well downsample, which is much simpler and also guaranteed to work without doing anything crazy._
+
+```{r}
+library(sctransform)
+
+mu <- 2^runif(10000, -5, 5)
+ncells <- 500
+y <- matrix(rnbinom(ncells*length(mu), mu=mu, size=100), nrow=length(mu))
+y[1:100,] <- matrix(rnbinom(ncells*100, mu=mu[1:100], size=10), nrow=100)
+
+# Need dimnames, annoyingly enough.
+rownames(y) <- sprintf("GENE_%i", seq_along(mu))
+colnames(y) <- sprintf("CELL_%i", seq_len(ncells))
+out <- vst(y, n_genes = NULL)
+
+plot(mu, matrixStats::rowVars(out$y), log="x")
+```
+
+_Here's an example of why I feel the Pearson residuals take too many liberties with the data:_
+
+```{r}
+library(SingleCellExperiment)
+sce <- readRDS("pbmc_data.rds") # output of simpleSingleCell/tenx.html
+
+library(sctransform)
+vst.out <- vst(counts(sce), return_corrected_umi = TRUE)
+
+library(scran)
+library(scater)
+fit2 <- modelGeneVar(logcounts(sce))
+plot(fit2$mean, fit2$total)
+
+# Looking at the variances of the residuals.
+# Note how the variances of the HVGs have increased by an order of magnitude.
+s2 <- matrixStats:::rowVars(vst.out$y)
+plot(fit2$mean[rownames(vst.out$y)], s2)
+rownames(vst.out$y)[order(s2, decreasing=TRUE)][1:10]
+
+# Looking at the first PC computed from the residuals.
+# This is completely driven by S100A8 and S100A9 (30% of the length of the 1st rotation vector).
+library(BiocSingular)
+stuff <- runPCA(t(vst.out$y), rank=10, BSPARAM=BiocSingular::bsparam())
+plot(stuff$x[,1], vst.out$y["S100A8",])
+sum(stuff$rotation[rownames(vst.out$y) %in% c("S100A8", "S100A9"),1]^2)
+
+# In contrast, with log-counts, this is a relatively modest 5%.
+library(BiocSingular)
+stuff2 <- runPCA(t(logcounts(sce)), rank=10, BSPARAM=BiocSingular::bsparam())
+plot(stuff2$x[,1], logcounts(sce)["S100A8",])
+sum(stuff2$rotation[rownames(sce) %in% c("S100A8", "S100A9"),1]^2)
+```
+
+I've used this on the simpleSingleCell tenx.html output, but you should get similar results for any processing of the 10X PBMC 4k dataset.
+The corrected UMIs are better, but you still need to log-transform them, so the added value of using that method is less clear
+
