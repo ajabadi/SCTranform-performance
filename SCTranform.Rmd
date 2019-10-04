@@ -26,6 +26,11 @@ library(scater)
 library(scran)
 ```
 
+```{r}
+dir.create('R_libs')
+.libPaths('R_libs')
+devtools::install_github("davismcc/scater")
+```
 
 
 ```{r, echo=FALSE}
@@ -45,30 +50,48 @@ filter_sce <- function(sce, mean_count=0, cell_det=0) {
   stopifnot(cell_det<=1 & cell_det>=0)
   cell_dropout <- (1-cell_det)*100
   sce_rd <- rowData(sce)
-  pass_filt <- sce_rd$mean_counts>=mean_count & sce_rd$pct_dropout_by_counts<=cell_dropout
+  pass_filt <- sce_rd$mean_counts>=mean_count & 
+    sce_rd$pct_dropout_by_counts<=cell_dropout & 
+    !grepl("ERCC", rownames(sce_rd))
   sce[pass_filt,]
 }
 ## main plot function
-pca_sctransform <- function(sce, cell_det = 0.05, min_expr =4, cell_line_colname="cell_line", do_scran=TRUE) {
+pca_sctransform <- function(sce, cell_det = 0.05, min_expr =4, 
+                            cell_line_colname="cell_line", do_scran=TRUE,
+                            scran_optimal=FALSE) {
     celline <-  as.factor(colData(sce)[,cell_line_colname])
     sce <- calculateQCMetrics(sce)
     sce <- filter_sce(sce, mean_count = min_expr, cell_det = cell_det)
     umi_sce = as(counts(sce), "dgCMatrix")
     # sctransform
-    vst_sce <- vst(umi_sce, n_genes = NULL, return_corrected_umi = TRUE,
+    sct_time <- system.time({
+      vst_sce <- vst(umi_sce, n_genes = NULL, return_corrected_umi = TRUE,
                       show_progress = FALSE)
+    })
+    
     
     if (do_scran) {
+      scran_time <- system.time({
         require(scran)
         sce <- computeSumFactors(sce)
+        if (scran_optimal) {
+          sce <- computeSumFactors(sce)
+        }
         sce <- normalize(sce)
         scran_norm <- t(logcounts(sce))
+      })
+      
+      scran_time <- round(scran_time[["elapsed"]])
+
     }
+    
+    sct_time <- round(sct_time[["elapsed"]])
+    
     scey <- t(vst_sce$y)
     sceumi <- t(log1p(as.matrix(vst_sce$umi_corrected)))
     sce_pca <- pca(scey, ncomp = 10)
     sce_pca_umi <- pca(sceumi, ncomp = 10)
-    cat("Explained Variance for PCA of SCTransformed Data")
+    cat(sprintf("Explained Variance for PCA of SCTransformed Data (run time: %s s)", sct_time))
     par(mfrow=c(1,2))
     plot(sce_pca, main = "Pearson Residuals")
     plot(sce_pca_umi, main = "Corrected UMIs")
@@ -78,40 +101,43 @@ pca_sctransform <- function(sce, cell_det = 0.05, min_expr =4, cell_line_colname
     plotIndiv(sce_pca, group = celline, pch=16, title="PCA using Pearson Residuals", legend=TRUE, legend.title="Phenotype")
     plotIndiv(sce_pca_umi, group = celline, pch=16, title="PCA using log(corrected UMI counts)", legend=TRUE, legend.title="Phenotype")
     if (do_scran) {
-        cat("Sample Plots using scran-normalised data")
         pca_scran <- pca(scran_norm, ncomp = 10)
+        cat(sprintf("Explained Variance for PCA of scran-normalised  (run time: %s s)", scran_time))
+        plot(pca_scran, main = "scran")
+        cat(sprintf("Sample Plots using scran-normalised data (run time: %s s)", scran_time))
         plotIndiv(pca_scran, group = celline, pch=16, title="PCA using scran normalised data", legend=TRUE, legend.title="Phenotype")
     }
+    invisible(return(list(scran = pca_scran, sctranform = sce_pca, sct_normed = vst_sce, scran_normed = scran_norm)))
 }
 ```
 
 
 # The 5 cell line Data
 
-Cells from five lung cancer cell lines.
+Cells from five lung cancer cell lines. Details in [here](https://github.com/LuyiTian/CellBench_data).
 
 ## 10X
 
 ```{r}
-pca_sctransform(sce_sc_10x_5cl_qc)
+tenx <- pca_sctransform(sce_sc_10x_5cl_qc)
 ```
 
 ## CEL-seq2 - plate 1
 
 ```{r}
-pca_sctransform(sc_Celseq2_5cl_p1, cell_line_colname = "cell_line_demuxlet")
+celseq_p1 <- pca_sctransform(sc_Celseq2_5cl_p1, cell_line_colname = "cell_line_demuxlet")
 ```
 
 ## CEL-seq2 - plate 2
 
 ```{r}
-pca_sctransform(sc_Celseq2_5cl_p2, cell_line_colname = "cell_line_demuxlet")
+celseq_p2 <- pca_sctransform(sc_Celseq2_5cl_p2, cell_line_colname = "cell_line_demuxlet")
 ```
 
 ## CEL-seq2 - plate 3
 
 ```{r}
-pca_sctransform(sc_Celseq2_5cl_p3, cell_line_colname = "cell_line_demuxlet")
+celseq_p3 <- pca_sctransform(sc_Celseq2_5cl_p3, cell_line_colname = "cell_line_demuxlet")
 ```
 
 # RNA mix
@@ -121,11 +147,46 @@ Diluted mixture of mRNA from 3 of the 5 cell lines (those most phenotypically si
 ## CEL-seq2
 
 ```{r}
-pca_sctransform(sce2_qc, cell_line_colname = "mix")
+sce2 <- pca_sctransform(sce2_qc, cell_line_colname = "mix")
 ```
 
 ## SORT-seq
 
 ```{r}
-pca_sctransform(sce8_qc, cell_line_colname = "mix")
+sce8 <- pca_sctransform(sce8_qc, cell_line_colname = "mix")
 ```
+
+## Discussion with Aaron Lun
+
+```{r}
+library(SingleCellExperiment)
+data("pbmc") # output of simpleSingleCell/tenx.html
+sce <- pbmc
+library(sctransform)
+vst.out <- vst(counts(sce), return_corrected_umi = TRUE)
+
+library(scran)
+library(scater)
+fit2 <- modelGeneVar(logcounts(sce))
+plot(fit2$mean, fit2$total)
+
+# Looking at the variances of the residuals.
+# Note how the variances of the HVGs have increased by an order of magnitude.
+s2 <- matrixStats:::rowVars(vst.out$y)
+plot(fit2$mean[rownames(vst.out$y)], s2)
+rownames(vst.out$y)[order(s2, decreasing=TRUE)][1:10]
+
+# Looking at the first PC computed from the residuals.
+# This is completely driven by S100A8 and S100A9 (30% of the length of the 1st rotation vector).
+library(BiocSingular)
+stuff <- runPCA(t(vst.out$y), rank=10, BSPARAM=BiocSingular::bsparam())
+plot(stuff$x[,1], vst.out$y["S100A8",])
+sum(stuff$rotation[rownames(vst.out$y) %in% c("S100A8", "S100A9"),1]^2)
+
+# In contrast, with log-counts, this is a relatively modest 5%.
+library(BiocSingular)
+stuff2 <- runPCA(t(logcounts(sce)), rank=10, BSPARAM=BiocSingular::bsparam())
+plot(stuff2$x[,1], logcounts(sce)["S100A8",])
+sum(stuff2$rotation[rownames(sce) %in% c("S100A8", "S100A9"),1]^2)
+```
+
